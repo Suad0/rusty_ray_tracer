@@ -1,4 +1,5 @@
 use std::ops::{Add, Div, Mul, Sub};
+use image::{Rgb, RgbImage};
 use rand::Rng;
 
 #[derive(Copy, Clone, Debug)]
@@ -158,25 +159,46 @@ struct Camera {
     lower_left_corner: Vec3,
     horizontal: Vec3,
     vertical: Vec3,
+    lens_radius: f64,  // For depth of field
+}
+
+fn random_in_unit_disk() -> Vec3 {
+    let mut rng = rand::thread_rng();
+    loop {
+        let p = Vec3::new(rng.gen::<f64>(), rng.gen::<f64>(), 0.0) * 2.0 - Vec3::new(1.0, 1.0, 0.0);
+        if p.dot(p) < 1.0 {
+            return p;
+        }
+    }
 }
 
 impl Camera {
-    fn new() -> Camera {
+    fn new(fov: f64, aspect: f64, aperture: f64, focus_dist: f64) -> Camera {
+        let lens_radius = aperture / 2.0;
+        let theta = fov.to_radians();
+        let half_height = (theta / 2.0).tan();
+        let half_width = aspect * half_height;
+        let origin = Vec3::new(0.0, 0.0, 0.0);
+
         Camera {
-            origin: Vec3::new(0.0, 0.0, 0.0),
-            lower_left_corner: Vec3::new(-2.0, -1.0, -1.0),
-            horizontal: Vec3::new(4.0, 0.0, 0.0),
-            vertical: Vec3::new(0.0, 2.0, 0.0),
+            origin,
+            lower_left_corner: origin - Vec3::new(half_width, half_height, 1.0) * focus_dist,
+            horizontal: Vec3::new(2.0 * half_width, 0.0, 0.0) * focus_dist,
+            vertical: Vec3::new(0.0, 2.0 * half_height, 0.0) * focus_dist,
+            lens_radius,
         }
     }
 
     fn get_ray(&self, u: f64, v: f64) -> Ray {
+        let rd = random_in_unit_disk() * self.lens_radius;
+        let offset = rd;  // Modify this to implement depth of field
         Ray::new(
-            self.origin,
-            self.lower_left_corner + self.horizontal * u + self.vertical * v - self.origin,
+            self.origin + offset,
+            self.lower_left_corner + self.horizontal * u + self.vertical * v - self.origin - offset,
         )
     }
 }
+
 
 struct Light {
     position: Vec3,
@@ -189,37 +211,66 @@ impl Light {
     }
 }
 
-fn in_shadow(ray: &Ray, spheres: &[Sphere]) -> bool {
-    for sphere in spheres {
-        if let Some(_) = sphere.hit(ray) {
-            return true; // There is an object blocking the light
+fn in_shadow(ray: &Ray, spheres: &[Sphere], light: &Light) -> bool {
+    let shadow_samples = 10;  // Number of random light samples
+    let mut rng = rand::thread_rng();
+
+    for _ in 0..shadow_samples {
+        // Randomly jitter the light source to simulate area light
+        let light_jitter = Vec3::new(
+            rng.gen::<f64>() - 0.5,
+            rng.gen::<f64>() - 0.5,
+            rng.gen::<f64>() - 0.5,
+        ) * 0.1; // Jitter amount to simulate area light
+
+        let jittered_light_pos = light.position + light_jitter;
+        let light_dir = (jittered_light_pos - ray.origin).unit_vector();
+        let shadow_ray = Ray::new(ray.origin, light_dir);
+
+        for sphere in spheres {
+            if let Some(_) = sphere.hit(&shadow_ray) {
+                return true;  // If any shadow ray hits an object, it's in shadow
+            }
         }
     }
     false
 }
 
-fn color(ray: &Ray, spheres: &[Sphere], planes: &[Plane], light: &Light) -> Vec3 {
+
+fn random_in_unit_sphere() -> Vec3 {
+    let mut rng = rand::thread_rng();
+    loop {
+        let p = Vec3::new(rng.gen::<f64>(), rng.gen::<f64>(), rng.gen::<f64>()) * 2.0 - Vec3::new(1.0, 1.0, 1.0);
+        if p.dot(p) < 1.0 {
+            return p;
+        }
+    }
+}
+
+fn color(ray: &Ray, spheres: &[Sphere], planes: &[Plane], light: &Light, depth: u32) -> Vec3 {
+    if depth >= 50 {
+        return Vec3::new(0.0, 0.0, 0.0); // Max recursion depth to avoid infinite loops
+    }
+
     let mut closest_t = f64::MAX;
     let mut hit_color = None;
 
-    // Check sphere intersections
+    // Check for sphere intersections
     for sphere in spheres {
         if let Some(t) = sphere.hit(ray) {
             if t < closest_t {
                 closest_t = t;
                 let hit_point = ray.point_at_parameter(t);
                 let N = (hit_point - sphere.center).unit_vector();
-
-                // Check for shadows
                 let light_dir = (light.position - hit_point).unit_vector();
-                let shadow_ray = Ray::new(hit_point, light_dir);
-                if in_shadow(&shadow_ray, spheres) {
-                    hit_color = Some(Vec3::new(0.1, 0.1, 0.1)); // In shadow, dark color
-                } else {
-                    // Diffuse lighting (Lambertian reflection)
-                    let light_intensity = light.intensity * N.dot(light_dir).max(0.0);
-                    hit_color = Some(Vec3::new(1.0, 0.5, 0.5) * light_intensity); // Diffuse shading
-                }
+
+                // Calculate new scattered ray for global illumination (random bounce)
+                let target = hit_point + N + random_in_unit_sphere();
+                let scattered_ray = Ray::new(hit_point, target - hit_point);
+                let bounce_color = color(&scattered_ray, spheres, planes, light, depth + 1);
+
+                // Combine direct lighting and bounce light (indirect lighting)
+                hit_color = Some(bounce_color * 0.5 + Vec3::new(1.0, 0.5, 0.5) * N.dot(light_dir).max(0.0) * light.intensity);
             }
         }
     }
@@ -235,7 +286,7 @@ fn color(ray: &Ray, spheres: &[Sphere], planes: &[Plane], light: &Light) -> Vec3
                 // Check for shadows
                 let light_dir = (light.position - hit_point).unit_vector();
                 let shadow_ray = Ray::new(hit_point, light_dir);
-                if in_shadow(&shadow_ray, spheres) {
+                if in_shadow(&shadow_ray, spheres, &light) {
                     hit_color = Some(Vec3::new(0.1, 0.1, 0.1)); // In shadow, dark color
                 } else {
                     // Diffuse lighting (Lambertian reflection)
@@ -247,6 +298,7 @@ fn color(ray: &Ray, spheres: &[Sphere], planes: &[Plane], light: &Light) -> Vec3
     }
 
     // Return hit color, or a default sky color if no object was hit
+    // Sky color (if no object is hit)
     if let Some(color) = hit_color {
         color
     } else {
@@ -260,37 +312,54 @@ fn main() {
     let nx = 200;
     let ny = 100;
     let ns = 10; // Number of samples per pixel for anti-aliasing
+    let aspect_ratio = nx as f64 / ny as f64;
 
-    println!("P3\n{} {}\n255", nx, ny);
-    let camera = Camera::new();
+    // Parameters for the camera
+    let fov = 90.0;
+    let aperture = 0.1;
+    let focus_dist = 1.0;
+
+    // Create a camera with the required parameters
+    let camera = Camera::new(fov, aspect_ratio, aperture, focus_dist);
+
+    // Create a light source
     let light = Light::new(Vec3::new(5.0, 5.0, 2.0), 1.0); // Point light
 
+    // Create some spheres for rendering
     let spheres = vec![
         Sphere::new(Vec3::new(0.0, 0.0, -1.0), 0.5),
         Sphere::new(Vec3::new(1.0, 0.0, -1.0), 0.5),
         Sphere::new(Vec3::new(-1.0, 0.0, -1.0), 0.5),
     ];
 
+    // Create a ground plane
     let planes = vec![
         Plane::new(Vec3::new(0.0, -0.5, 0.0), Vec3::new(0.0, 1.0, 0.0)), // Ground plane
     ];
 
+    let mut img = RgbImage::new(nx as u32, ny as u32);
     let mut rng = rand::thread_rng();
 
-    for j in (0..ny).rev() {
+    // Render the image
+    for j in 0..ny {
         for i in 0..nx {
             let mut col = Vec3::new(0.0, 0.0, 0.0);
             for _ in 0..ns {
                 let u = (i as f64 + rng.gen::<f64>()) / nx as f64;
                 let v = (j as f64 + rng.gen::<f64>()) / ny as f64;
                 let ray = camera.get_ray(u, v);
-                col = col + color(&ray, &spheres, &planes, &light);
+                col = col + color(&ray, &spheres, &planes, &light, 0);
             }
             col = col / ns as f64;
-            let ir = (255.99 * col.x) as i32;
-            let ig = (255.99 * col.y) as i32;
-            let ib = (255.99 * col.z) as i32;
-            println!("{} {} {}", ir, ig, ib);
+
+            // Convert color to 8-bit and store in the image buffer
+            let ir = (255.99 * col.x) as u8;
+            let ig = (255.99 * col.y) as u8;
+            let ib = (255.99 * col.z) as u8;
+            img.put_pixel(i as u32, (ny - j - 1) as u32, Rgb([ir, ig, ib]));
         }
     }
+
+    // Save the image as PNG
+    img.save("output.png").unwrap();
 }
