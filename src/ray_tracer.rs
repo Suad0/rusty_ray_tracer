@@ -3,10 +3,10 @@ use image::{Rgb, RgbImage};
 use rand::Rng;
 
 #[derive(Copy, Clone, Debug)]
-struct Vec3 {
-    x: f64,
-    y: f64,
-    z: f64,
+pub struct Vec3 {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
 }
 
 impl Mul<f64> for Vec3 {
@@ -93,7 +93,7 @@ impl Vec3 {
     }
 }
 
-struct Ray {
+pub struct Ray {
     origin: Vec3,
     direction: Vec3,
 }
@@ -108,8 +108,8 @@ impl Ray {
     }
 }
 
-struct Sphere {
-    center: Vec3,
+pub struct Sphere {
+    pub(crate) center: Vec3,
     radius: f64,
 }
 
@@ -132,8 +132,8 @@ impl Sphere {
     }
 }
 
-struct Plane {
-    point: Vec3,    // A point on the plane
+pub struct Plane {
+    pub(crate) point: Vec3,    // A point on the plane
     normal: Vec3,   // The plane's normal vector
 }
 
@@ -154,7 +154,7 @@ impl Plane {
     }
 }
 
-struct Camera {
+pub struct Camera {
     origin: Vec3,
     lower_left_corner: Vec3,
     horizontal: Vec3,
@@ -200,7 +200,7 @@ impl Camera {
 }
 
 
-struct Light {
+pub struct Light {
     position: Vec3,
     intensity: f64, // Brightness of the light
 }
